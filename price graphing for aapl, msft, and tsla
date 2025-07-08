@@ -1,0 +1,209 @@
+import pandas as pd
+import numpy as np
+import datetime
+import matplotlib.pyplot as plt
+import refinitiv.data as rd
+
+# Open session with your API key
+rd.open_session(app_key="6f729f5adbb74b119fdc4511d800c606d0c785b1")
+
+# Define the stock symbols (Refinitiv RICs)
+symbols = {
+    'Apple': 'AAPL.O',
+    'Microsoft': 'MSFT.O', 
+    'Tesla': 'TSLA.O'
+}
+
+# Define date range (past few years)
+start_date = "2020-01-01"
+end_date = "2025-07-01"
+
+# Define fields to extract (start with just CLOSE like your original code)
+fields = ["CLOSE"]
+
+# Dictionary to store results
+stock_data = {}
+
+try:
+    # Extract data for each stock
+    for company, symbol in symbols.items():
+        print(f"Extracting data for {company} ({symbol})...")
+        
+        # Try different field combinations
+        field_options = [
+            ["CLOSE"],  # Start with your working example
+            ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"],  # Standard OHLCV
+            None  # Use default fields
+        ]
+        
+        success = False
+        for fields_to_try in field_options:
+            try:
+                if fields_to_try is None:
+                    response = rd.get_history(
+                        universe=symbol,
+                        start=start_date,
+                        end=end_date,
+                        interval="1W"  # Weekly interval
+                    )
+                else:
+                    response = rd.get_history(
+                        universe=symbol,
+                        fields=fields_to_try,
+                        start=start_date,
+                        end=end_date,
+                        interval="1W"  # Weekly interval
+                    )
+                
+                if response is not None and not response.empty:
+                    # Store the data
+                    stock_data[company] = response
+                    print(f"Successfully extracted {len(response)} weekly records for {company}")
+                    print(f"Available columns: {list(response.columns)}")
+                    success = True
+                    break
+                    
+            except Exception as field_error:
+                print(f"  Failed with fields {fields_to_try}: {str(field_error)}")
+                continue
+        
+        if not success:
+            print(f"Could not extract data for {company} with any field combination")
+    
+    # Display summary of extracted data
+    print("\n" + "="*50)
+    print("DATA EXTRACTION SUMMARY")
+    print("="*50)
+    
+    for company, data in stock_data.items():
+        print(f"\n{company}:")
+        print(f"  Date range: {data.index.min()} to {data.index.max()}")
+        print(f"  Number of records: {len(data)}")
+        print(f"  Available columns: {list(data.columns)}")
+        
+        # Find the close price column (could be 'CLOSE', 'Close', or similar)
+        close_col = None
+        for col in data.columns:
+            if 'close' in col.lower() or 'price' in col.lower():
+                close_col = col
+                break
+        
+        # If still no close column found, try the first numeric column
+        if close_col is None:
+            for col in data.columns:
+                if pd.api.types.is_numeric_dtype(data[col]):
+                    close_col = col
+                    break
+        
+        if close_col:
+            print(f"  Latest close price: ${data[close_col].iloc[-1]:.2f}")
+        else:
+            print(f"  Close price column not found")
+        
+        # Display first few rows
+        print(f"  First 3 records:")
+        print(data.head(3))
+    
+    # Optional: Combine all close prices into a single DataFrame for comparison
+    close_prices = pd.DataFrame()
+    for company, data in stock_data.items():
+        # Find the close price column dynamically
+        close_col = None
+        for col in data.columns:
+            if 'close' in col.lower() or 'price' in col.lower():
+                close_col = col
+                break
+        
+        # If still no close column found, try the first numeric column
+        if close_col is None:
+            for col in data.columns:
+                if pd.api.types.is_numeric_dtype(data[col]):
+                    close_col = col
+                    break
+        
+        if close_col:
+            close_prices[company] = data[close_col]
+    
+    print("\n" + "="*50)
+    print("COMBINED CLOSE PRICES (Last 5 weeks)")
+    print("="*50)
+    print(close_prices.tail())
+    
+    # Optional: Simple visualization
+    if len(stock_data) > 0:
+        plt.figure(figsize=(12, 8))
+        
+        # Debug: Check what we're plotting
+        print(f"\n{'='*50}")
+        print("PLOTTING DEBUG INFO")
+        print(f"{'='*50}")
+        
+        for company, data in stock_data.items():
+            print(f"\n{company} data shape: {data.shape}")
+            print(f"Columns: {list(data.columns)}")
+            print(f"Data types: {data.dtypes}")
+            
+            # Find the close price column dynamically
+            close_col = None
+            for col in data.columns:
+                if 'close' in col.lower() or 'price' in col.lower():
+                    close_col = col
+                    break
+            
+            # If still no close column found, try the first numeric column
+            if close_col is None:
+                for col in data.columns:
+                    if pd.api.types.is_numeric_dtype(data[col]):
+                        close_col = col
+                        break
+            
+            print(f"Using column: {close_col}")
+            
+            if close_col and close_col in data.columns:
+                # Check for valid data
+                valid_data = data[close_col].dropna()
+                print(f"Valid data points: {len(valid_data)}")
+                print(f"Price range: ${valid_data.min():.2f} - ${valid_data.max():.2f}")
+                
+                if len(valid_data) > 0:
+                    plt.plot(data.index, data[close_col], label=company, linewidth=2, marker='o', markersize=1)
+                    print(f"✓ Plotted {company}")
+                else:
+                    print(f"✗ No valid data for {company}")
+            else:
+                print(f"✗ No suitable column found for {company}")
+        
+        plt.title('Weekly Stock Prices - Apple, Microsoft, Tesla')
+        plt.xlabel('Date')
+        plt.ylabel('Price ($)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        
+        # Check if any data was actually plotted
+        ax = plt.gca()
+        if len(ax.lines) > 0:
+            plt.show()
+            plt.savefig('weekly_stock_prices.png', dpi=300, bbox_inches='tight')
+            print("\nChart saved as 'weekly_stock_prices.png'")
+        else:
+            print("\n⚠️  No data lines were plotted - check the debug info above")
+            plt.close()
+    else:
+        print("No stock data available for plotting")
+    
+    # Optional: Save data to CSV files
+    for company, data in stock_data.items():
+        filename = f"{company.lower()}_weekly_prices.csv"
+        data.to_csv(filename)
+        print(f"Data for {company} saved to {filename}")
+
+except Exception as e:
+    print(f"Error occurred: {str(e)}")
+    print("Please check your API key, internet connection, and symbol names.")
+
+finally:
+    # Always close the session
+    rd.close_session()
+    print("\nRefinitiv session closed.")
