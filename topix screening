@@ -1,0 +1,264 @@
+import pandas as pd
+import numpy as np
+import refinitiv.data as rd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime
+
+# Open session with your API key
+rd.open_session(app_key="6f729f5adbb74b119fdc4511d800c606d0c785b1")
+
+print("TOPIX Value Stock Screener")
+print("="*50)
+print("Screening for: Low Market Cap + Below Average P/B Ratio")
+print("="*50)
+
+try:
+    # Get TOPIX constituent companies
+    print("Step 1: Fetching TOPIX constituent companies...")
+    
+    # Get the TOPIX index constituents
+    topix_constituents = rd.get_data(
+        universe=".TOPX",  # TOPIX index
+        fields=[
+            "TR.IndexConstituentRIC",
+            "TR.IndexConstituentName",
+            "TR.IndexConstituentWeightPercent"
+        ]
+    )
+    
+    if topix_constituents is None or topix_constituents.empty:
+        print("Could not fetch TOPIX constituents. Trying alternative approach...")
+        
+        # Alternative: Get a sample of Japanese stocks
+        japanese_stocks = [
+            "7203.T",  # Toyota
+            "6758.T",  # Sony
+            "9984.T",  # SoftBank
+            "8306.T",  # Mitsubishi UFJ
+            "6861.T",  # Keyence
+            "4519.T",  # Chugai Pharma
+            "6954.T",  # Fanuc
+            "4502.T",  # Takeda
+            "8058.T",  # Mitsubishi Corp
+            "9432.T",  # NTT
+        ]
+        
+        # Create a sample DataFrame
+        stock_rics = japanese_stocks[:20]  # Limit to prevent API overload
+        
+    else:
+        print(f"Found {len(topix_constituents)} TOPIX constituents")
+        stock_rics = topix_constituents['TR.IndexConstituentRIC'].dropna().tolist()[:100]  # Limit to first 100 for performance
+    
+    print(f"Analyzing {len(stock_rics)} stocks...")
+    
+    # Step 2: Get financial metrics for screening
+    print("\nStep 2: Fetching financial metrics...")
+    
+    # Define the fields we need
+    fields = [
+        "TR.CompanyName",
+        "TR.TotalReturn1D",  # Latest price data
+        "TR.CompanyMarketCap",  # Market capitalization
+        "TR.PriceToBookValue",  # Price-to-book ratio
+        "TR.Revenue",  # Revenue for additional context
+        "TR.NetIncome",  # Net income
+        "TR.TotalDebt",  # Total debt
+        "TR.BookValuePerShare",  # Book value per share
+        "TR.Currency"  # Currency
+    ]
+    
+    # Get the data in batches to avoid API limits
+    batch_size = 50
+    all_data = []
+    
+    for i in range(0, len(stock_rics), batch_size):
+        batch = stock_rics[i:i+batch_size]
+        print(f"  Processing batch {i//batch_size + 1} ({len(batch)} stocks)...")
+        
+        try:
+            batch_data = rd.get_data(
+                universe=batch,
+                fields=fields
+            )
+            
+            if batch_data is not None and not batch_data.empty:
+                all_data.append(batch_data)
+                
+        except Exception as e:
+            print(f"  Error processing batch: {str(e)}")
+            continue
+    
+    if not all_data:
+        raise Exception("No data retrieved from any batch")
+    
+    # Combine all batches
+    screening_data = pd.concat(all_data, ignore_index=True)
+    
+    print(f"\nStep 3: Retrieved data for {len(screening_data)} companies")
+    print(f"Available columns: {list(screening_data.columns)}")
+    
+    # Clean and prepare data
+    print("\nStep 4: Cleaning and preparing data...")
+    
+    # Convert numeric columns
+    numeric_columns = ['TR.CompanyMarketCap', 'TR.PriceToBookValue', 'TR.Revenue', 'TR.NetIncome']
+    for col in numeric_columns:
+        if col in screening_data.columns:
+            screening_data[col] = pd.to_numeric(screening_data[col], errors='coerce')
+    
+    # Remove rows with missing critical data
+    screening_data = screening_data.dropna(subset=['TR.CompanyMarketCap', 'TR.PriceToBookValue'])
+    
+    # Filter out negative or zero values
+    screening_data = screening_data[
+        (screening_data['TR.CompanyMarketCap'] > 0) & 
+        (screening_data['TR.PriceToBookValue'] > 0)
+    ]
+    
+    print(f"After cleaning: {len(screening_data)} companies with valid data")
+    
+    if len(screening_data) == 0:
+        raise Exception("No valid data after cleaning")
+    
+    # Step 5: Calculate screening criteria
+    print("\nStep 5: Applying screening criteria...")
+    
+    # Calculate percentiles for market cap (looking for smaller companies)
+    market_cap_25th = screening_data['TR.CompanyMarketCap'].quantile(0.25)
+    market_cap_median = screening_data['TR.CompanyMarketCap'].quantile(0.5)
+    
+    # Calculate average P/B ratio
+    avg_pb_ratio = screening_data['TR.PriceToBookValue'].mean()
+    median_pb_ratio = screening_data['TR.PriceToBookValue'].median()
+    
+    print(f"Market Cap 25th percentile: ${market_cap_25th:,.0f}")
+    print(f"Market Cap median: ${market_cap_median:,.0f}")
+    print(f"Average P/B ratio: {avg_pb_ratio:.2f}")
+    print(f"Median P/B ratio: {median_pb_ratio:.2f}")
+    
+    # Apply screening filters
+    value_candidates = screening_data[
+        (screening_data['TR.CompanyMarketCap'] <= market_cap_25th) &  # Low market cap (bottom 25%)
+        (screening_data['TR.PriceToBookValue'] <= avg_pb_ratio)  # Below average P/B ratio
+    ].copy()
+    
+    print(f"\nFound {len(value_candidates)} potential value candidates!")
+    
+    # Step 6: Rank and display results
+    print("\nStep 6: Ranking results...")
+    
+    # Sort by P/B ratio (lower is better for value investing)
+    value_candidates = value_candidates.sort_values('TR.PriceToBookValue')
+    
+    # Display top candidates
+    print(f"\n{'='*80}")
+    print("TOP VALUE CANDIDATES (Low Market Cap + Below Average P/B)")
+    print(f"{'='*80}")
+    
+    display_columns = ['Instrument', 'TR.CompanyName', 'TR.CompanyMarketCap', 'TR.PriceToBookValue']
+    available_display_cols = [col for col in display_columns if col in value_candidates.columns]
+    
+    for i, (_, row) in enumerate(value_candidates.head(20).iterrows()):
+        print(f"\n{i+1}. {row.get('TR.CompanyName', 'N/A')}")
+        print(f"   RIC: {row.get('Instrument', 'N/A')}")
+        print(f"   Market Cap: ${row.get('TR.CompanyMarketCap', 0):,.0f}")
+        print(f"   P/B Ratio: {row.get('TR.PriceToBookValue', 0):.2f}")
+        if 'TR.Revenue' in row and pd.notna(row['TR.Revenue']):
+            print(f"   Revenue: ${row['TR.Revenue']:,.0f}")
+    
+    # Step 7: Create visualizations
+    print(f"\nStep 7: Creating visualizations...")
+    
+    if len(value_candidates) > 0:
+        # Create scatter plot
+        plt.figure(figsize=(15, 10))
+        
+        # Plot 1: Market Cap vs P/B Ratio
+        plt.subplot(2, 2, 1)
+        plt.scatter(screening_data['TR.CompanyMarketCap'], screening_data['TR.PriceToBookValue'], 
+                   alpha=0.6, s=50, c='lightblue', label='All TOPIX stocks')
+        plt.scatter(value_candidates['TR.CompanyMarketCap'], value_candidates['TR.PriceToBookValue'], 
+                   alpha=0.8, s=100, c='red', label='Value candidates')
+        plt.axhline(y=avg_pb_ratio, color='orange', linestyle='--', alpha=0.7, label=f'Avg P/B ({avg_pb_ratio:.2f})')
+        plt.axvline(x=market_cap_25th, color='green', linestyle='--', alpha=0.7, label=f'25th percentile Market Cap')
+        plt.xlabel('Market Cap ($)')
+        plt.ylabel('Price-to-Book Ratio')
+        plt.title('Market Cap vs P/B Ratio')
+        plt.legend()
+        plt.xscale('log')
+        plt.grid(True, alpha=0.3)
+        
+        # Plot 2: P/B Ratio distribution
+        plt.subplot(2, 2, 2)
+        plt.hist(screening_data['TR.PriceToBookValue'], bins=30, alpha=0.7, color='lightblue', label='All stocks')
+        plt.hist(value_candidates['TR.PriceToBookValue'], bins=15, alpha=0.8, color='red', label='Value candidates')
+        plt.axvline(x=avg_pb_ratio, color='orange', linestyle='--', label=f'Average P/B ({avg_pb_ratio:.2f})')
+        plt.xlabel('Price-to-Book Ratio')
+        plt.ylabel('Frequency')
+        plt.title('P/B Ratio Distribution')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Plot 3: Market Cap distribution
+        plt.subplot(2, 2, 3)
+        plt.hist(screening_data['TR.CompanyMarketCap'], bins=30, alpha=0.7, color='lightblue', label='All stocks')
+        plt.hist(value_candidates['TR.CompanyMarketCap'], bins=15, alpha=0.8, color='red', label='Value candidates')
+        plt.axvline(x=market_cap_25th, color='green', linestyle='--', label=f'25th percentile')
+        plt.xlabel('Market Cap ($)')
+        plt.ylabel('Frequency')
+        plt.title('Market Cap Distribution')
+        plt.legend()
+        plt.xscale('log')
+        plt.grid(True, alpha=0.3)
+        
+        # Plot 4: Top candidates bar chart
+        plt.subplot(2, 2, 4)
+        top_10 = value_candidates.head(10)
+        company_names = [name[:15] + '...' if len(name) > 15 else name 
+                        for name in top_10['TR.CompanyName'].fillna('N/A')]
+        plt.barh(range(len(top_10)), top_10['TR.PriceToBookValue'])
+        plt.yticks(range(len(top_10)), company_names)
+        plt.xlabel('Price-to-Book Ratio')
+        plt.title('Top 10 Value Candidates by P/B Ratio')
+        plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('topix_value_screening.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        print("Visualizations saved as 'topix_value_screening.png'")
+    
+    # Step 8: Export results
+    print(f"\nStep 8: Exporting results...")
+    
+    # Save to CSV
+    value_candidates.to_csv('topix_value_candidates.csv', index=False)
+    screening_data.to_csv('topix_all_screening_data.csv', index=False)
+    
+    print("Results exported to:")
+    print("- topix_value_candidates.csv (filtered results)")
+    print("- topix_all_screening_data.csv (all screening data)")
+    
+    # Summary statistics
+    print(f"\n{'='*50}")
+    print("SCREENING SUMMARY")
+    print(f"{'='*50}")
+    print(f"Total companies analyzed: {len(screening_data)}")
+    print(f"Value candidates found: {len(value_candidates)}")
+    print(f"Success rate: {len(value_candidates)/len(screening_data)*100:.1f}%")
+    print(f"Average market cap of candidates: ${value_candidates['TR.CompanyMarketCap'].mean():,.0f}")
+    print(f"Average P/B ratio of candidates: {value_candidates['TR.PriceToBookValue'].mean():.2f}")
+
+except Exception as e:
+    print(f"Error occurred: {str(e)}")
+    print("This could be due to:")
+    print("- API rate limits")
+    print("- Insufficient permissions for TOPIX data")
+    print("- Network connectivity issues")
+    print("- Field name mismatches")
+
+finally:
+    rd.close_session()
+    print("\nRefinitiv session closed.")
