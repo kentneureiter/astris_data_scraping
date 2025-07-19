@@ -6,7 +6,7 @@ import seaborn as sns
 from datetime import datetime
 
 # Open session with your API key
-rd.open_session(app_key="6f729f5adbb74b119fdc4511d800c606d0c785b1")
+rd.open_session(app_key="enter your personal refinitiv api key here")
 
 print("TOPIX Value Stock Screener")
 print("="*50)
